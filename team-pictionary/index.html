@@ -1,0 +1,646 @@
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <link rel="stylesheet" href="http://cibsr-x23.stanford.edu/team-pictionary/styles.css" />
+        <script src="/socket.io/socket.io.js"></script>
+        <script src="http://code.jquery.com/jquery-1.8.0.min.js"></script>
+        <script src="http://ajax.googleapis.com/ajax/libs/jqueryui/1.8.23/jquery-ui.min.js"></script>
+   
+        <style>
+          .ui-dialog-titlebar-close{
+             display: none;
+          }
+          </style>
+        <script>
+            // This demo depends on the canvas element
+            if(!('getContext' in document.createElement('canvas'))){
+                alert('Sorry, it looks like your browser does not support canvas!');
+            }
+            
+            var url = 'http://cibsr-x23.stanford.edu:8080';
+            // //var localURL = 'http://localhost:9090';
+            var playerId = '';
+            var scannerId = '';
+            var socket = '';
+            
+            var drawing = false;
+            var clients = {};
+            var cursors = {};
+            var prev = {};
+            var lastEmit = '';
+            var doc = '';
+            var canvas = '';
+            var window = '';
+            var ctx = '';
+            var ctx_overlay = '';
+            var instructions = '';
+            var lastcheck = '';
+            var funcs = [instructionPage, clearScreen, drawFixationMark, drawWord, clearScreen, drawFixationMark, drawZigzag];
+            var counter = 0;
+            var img1, img2;
+            var canvas_overlay = '';
+            var dialog;
+            var iamArtist = false;
+            $(document).ready(function(){
+                              socket = io.connect(url);
+                              //localSocket = io.connect(localURL);
+                              doc = $(document);
+                              win = $(window),
+                              canvas = $('#paper'),
+                              ctx = canvas[0].getContext('2d'),
+                              instructions = $('#instructions');
+                              canvas_overlay = $('#overlay');
+                              ctx_overlay = canvas_overlay[0].getContext('2d');
+                              clearScreenOverlay();
+                              
+                              
+                              socket.on('connect', function(data){
+                                        //playerId = prompt("Enter player Id please");
+                                        //scannerId = prompt("Enter scanner Id please (i.e., CNI, 3T2, or 3T3)");
+
+                                        dialog = $("#dialog-form").dialog({
+                                            dialogClass: 'no-close',
+                                            closeOnEscape: false,                              
+                                            autoOpen: true,
+                                            height: 100,
+                                            width: 350,
+                                            modal: true,
+                                            buttons: {
+                                                "Add Player": addUser
+                                                }
+                                            });
+                                        
+
+                                        });
+                              
+                              
+                              socket.on('moving', function (data) {
+
+                                        if(! (data.id in clients)){
+                                            cursors[data.id] = $('<div class="cursor">').appendTo('#cursors');
+                                        }
+                                        
+                                        
+                                        // Move the mouse pointer
+                                        cursors[data.id].css({
+                                                              'left' : data.x,
+                                                              'top' : data.y
+                                                              });
+                                        
+                                        // Is the user drawing?
+                                        if(data.drawing && clients[data.id]){
+                                            drawLine(clients[data.id].x, clients[data.id].y, data.x, data.y);
+                                        }
+                                        
+                                        // Saving the current client state
+                                        clients[data.id] = data;
+                                        clients[data.id].updated = $.now();
+                                        });
+                              
+                              socket.on('connRefused', function(){
+                                        socket.disconnect();
+                                        var element = document.getElementById("header");
+                                        element.innerHTML = "Connection Refused by the Server, already three clients logged in.";                                            
+                                        });
+                              socket.on('closeAndReopen', function(){
+                                        location.reload(true);
+                                        });
+                              
+                              socket.on('StartScanners', function(){
+                                        // Temp: for now we are printing start the scanner, eventually we want to run the serial port command
+                                        // Todo: we need to run a local nodejs server on the clients. This local server will launch serial port commands
+                                        // once StartScanners command is shown.
+                                        // document.getElementById("instructions").innerHTML = "<h1>Start the scanner</h1>";
+
+                                        // For each pictionary word:
+                                        // (1) Draw the word (e.g., salute) and the corresponding control word (zigzag) independently. We will still emit the coordinates, however, the server won't broadcast them to rest of the world. It will just save the coordinates.
+
+                                        // setTimeout(callFuncs, 1000); //delay start 1 sec.
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        
+                                        setTimeout(function(){
+                                                   //localSocket.emit('startScanner', {'data': "5"});
+                                                   var sec = 5;
+                                                   ctx.font = "20px Arial";
+                                                   
+                                                   var timer = setInterval(function() {
+                                                      ctx.fillText("Start the scanner in " + --sec, 300, 384);
+                                                      if (sec == 0) {
+                                                         clearScreen();
+                                                         ctx.font = "40px Arial";                  
+                                                         ctx.fillText("GO", 512, 384);
+                                                         clearInterval(timer);
+                                                                           
+                                                         //drawFixationMark();
+                                                      }
+                                                      setTimeout(function(){
+                                                                 clearScreen();
+                                                                 }, 900);
+                                                   }, 1000);
+                                                   
+                                                   
+                                                   
+                                                   }, 20);
+//                                        setTimeout(function(){
+//                                                   drawFixationMark();
+//                                                   }, 5050);
+                                        // (2) In the second part, each participant will observe and mark the already drawn drawings from the other two participants. The markings made by the participants will also be sent to the server, but the server will just save them and won't broadcast them again.
+                                        // (3) In the third part, collaborative one - participant will take turns in drawing the word and will observe "live" drawings from other participants.
+  
+                                        
+                                        });
+                              
+                              socket.on('showInstructions', function(){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        setTimeout(function(){
+                                                   instructionPage();
+                                                   }, 10);
+                                        });
+                              
+                              socket.on('showFixation', function(){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        setTimeout(function(){
+                                                   drawFixationMark();
+                                                   }, 10);
+                                        });
+                              
+                              socket.on('showFixationAndSave', function(data){
+                                        
+                                        //save data using canvas.datatoURL
+                                        socket.emit('hereIsData', {'word': data.word,
+                                                                   'dataURL': canvas[0].toDataURL(),
+                                                                   'id': playerId,
+                                                                   'cond': data.cond});
+
+                                        setTimeout(function(){
+                                                   clearScreen();
+                                                   clearScreenOverlay();
+                                                   }, 10);
+                                        setTimeout(function(){
+                                                   drawFixationMark();
+                                                   }, 20);
+                                        
+                                        });
+                              socket.on('showFixationAndSaveCoop', function(data){
+                                        
+                                        //save data using canvas.datatoURL
+                                        if(iamArtist == true){
+                                        socket.emit('hereIsData', {'word': data.word,
+                                                    'dataURL': canvas[0].toDataURL(),
+                                                    'id': playerId,
+                                                    'cond': data.cond}
+                                                    );
+                                        }
+//                                        setTimeout(function(){
+//                                                   clearScreenCoop();
+//                                                   }, 10);
+                                        setTimeout(function(){
+                                                   drawFixationMarkOverlay();
+                                                   }, 10);
+                                        
+                                        });
+                              
+//                              socket.on('showFixationAndSaveLocally', function(data){
+//                                        
+//                                        //save data using canvas.datatoURL
+//                                        localSocket.emit('saveDataLocally', {'word': data.word,
+//                                                    'dataURL': canvas[0].toDataURL(),
+//                                                    'id': playerId,
+//                                                    'cond': data.cond});
+//                                        
+//                                        setTimeout(function(){
+//                                                   clearScreen();
+//                                                   }, 10);
+//                                        setTimeout(function(){
+//                                                   drawFixationMark();
+//                                                   }, 20);
+//                                        
+//                                        });
+                              
+                              socket.on('endExperiment', function(){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        console.log('End of experiment called');
+                                        setTimeout(function(){
+                                                   thanksPage();
+                                                   }, 10);
+                                        });
+                              
+                              socket.on('picBlockInd', function(data){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        setTimeout(function(){
+                                                   console.log('I am in pic block ind');
+                                                   drawWord("Draw " + data.word);
+                                                   canvas.on('mousedown',function(e){
+                                                             e.preventDefault();
+                                                             drawing = true;
+                                                             prev.x = e.pageX;
+                                                             prev.y = e.pageY;
+                                                             });
+                                                   
+                                                   //drawing = true;
+                                                   lastEmit = $.now();
+                                                   doc.on('mousemove',function(e){
+                                                          if($.now() - lastEmit > 30){
+                                                          socket.emit('mouseMoveInd',{
+                                                                      'x': e.pageX,
+                                                                      'y': e.pageY,
+                                                                      'drawing': drawing,
+                                                                      'id': playerId,
+                                                                      'word': data.word
+                                                                      });
+                                                          lastEmit = $.now();
+                                                          }
+                                                          
+                                                          // Draw a line for the current user's movement, as it is
+                                                          // not received in the socket.on('moving') event above
+                                                          
+                                                          if(drawing){
+                                                          drawLine(prev.x, prev.y, e.pageX, e.pageY);
+                                                          prev.x = e.pageX;
+                                                          prev.y = e.pageY;
+                                                          }
+                                                          });
+                                                   
+                                                   doc.bind('mouseup mouseleave',function(){
+                                                            drawing = false;
+                                                            });
+                                                   
+                                                   
+                                                   }, 10);
+                                        });
+                              
+                              socket.on('zigBlockInd', function(data){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        setTimeout(function(){
+                                                   console.log('I am in zig block ind');
+                                                   drawZigzag("Draw " + data.word);
+                                                   
+                                                   canvas.on('mousedown',function(e){
+                                                             e.preventDefault();
+                                                             drawing = true;
+                                                             prev.x = e.pageX;
+                                                             prev.y = e.pageY;
+                                                             });
+                                                   
+                                                   //drawing = true;
+                                                   lastEmit = $.now();
+                                                   
+                                                   doc.on('mousemove',function(e){
+                                                          if($.now() - lastEmit > 30){
+                                                          socket.emit('mouseMoveInd',{
+                                                                      'x': e.pageX,
+                                                                      'y': e.pageY,
+                                                                      'drawing': drawing,
+                                                                      'id': playerId,
+                                                                      'word': data.word
+                                                                      });
+                                                          lastEmit = $.now();
+                                                          }
+                                                          
+                                                          // Draw a line for the current user's movement, as it is
+                                                          // not received in the socket.on('moving') event above
+                                                          
+                                                          if(drawing){
+                                                          drawLine(prev.x, prev.y, e.pageX, e.pageY);
+                                                          prev.x = e.pageX;
+                                                          prev.y = e.pageY;
+                                                          }
+                                                          });
+                                                   
+                                                   doc.bind('mouseup mouseleave',function(){
+                                                            drawing = false;
+                                                            });
+                                                   
+                                                   }, 10);
+                                        
+                                        });
+                              
+                              socket.on('inspirationPhase', function(data){
+                                        clearScreen();
+                                        clearScreenOverlay();
+                                        setTimeout(function(){
+                                                   console.log('I am in inspiration phase');
+                                                   // get the URL of the picture and portray it here.
+                                                   var player1 = data.playerid1;
+                                                   var player2 = data.playerid2;
+                                                   var player3 = data.playerid3;
+                                                   var cond = 'indep';
+                                                   var hostUrl = 'http://cibsr-x23.stanford.edu:8080/';
+                                                   if(playerId == player1){
+                                                    imageURL1 = hostUrl + 'Image_Client_' + player2 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                    imageURL2 = hostUrl + 'Image_Client_' + player3 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                   } else if(playerId == player2){
+                                                    imageURL1 = hostUrl + 'Image_Client_' + player1 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                    imageURL2 = hostUrl + 'Image_Client_' + player3 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                   } else if(playerId == player3){
+                                                    imageURL1 = hostUrl + 'Image_Client_' + player1 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                    imageURL2 = hostUrl + 'Image_Client_' + player2 + '_Word_' + data.word + '_Cond_' + cond + '.png';
+                                                   
+                                                   }
+                                                   
+                                                   
+                                                  inspireInstructions();
+                                                  img1 = new Image();
+                                                  img1.onload = function() {
+                                                   ctx.drawImage(img1, 0, 0, 512, 384);
+                                                   ctx.fillStyle = "rgba(50, 0, 0, 0.3)";
+                                                   ctx.fillRect(0, 0, 512, 384);
+                                                   ctx.fillStyle = "rgba(0, 0, 0, 1)";
+                                                  }
+                                                  img1.setAttribute('crossOrigin', 'anonymous');
+                                                  // img1.crossOrigin = '';
+                                                  img1.src = imageURL1;
+                                                  
+                                                  img2 = new Image();
+                                                  img2.onload = function(){
+                                                   ctx.drawImage(img2, 512, 384, 512, 384);
+                                                   ctx.fillStyle = "rgba(50, 0, 0, 0.3)";
+                                                   ctx.fillRect(512, 384, 512, 384);
+                                                   ctx.fillStyle = "rgba(0, 0, 0, 1)";
+                                                  }
+                                                  img2.setAttribute('crossOrigin', 'anonymous');
+                                                  //img2.crossOrigin = '';
+                                                  img2.src = imageURL2;
+                                                  
+                                                  //ctx.drawImage(img1, 0, 0);
+                                                  //ctx.drawImage(img2, 0, 0);
+
+                                                   
+                                                  // let the participant draw on top of the two images as background
+                                                  canvas.on('mousedown',function(e){
+                                                            
+                                                            e.preventDefault();
+                                                            drawing = true;
+                                                            prev.x = e.pageX;
+                                                            prev.y = e.pageY;
+                                                            });
+                                                  
+                                                  //drawing = true;
+                                                  lastEmit = $.now();
+                                                  
+                                                  doc.on('mousemove',function(e){
+                                                         //ctx.drawImage(img1, 0, 0);
+                                                         //ctx.drawImage(img2, 0, 0);
+                                                         
+                                                         if($.now() - lastEmit > 30){
+                                                         socket.emit('mouseMoveInd',{
+                                                                     'x': e.pageX,
+                                                                     'y': e.pageY,
+                                                                     'drawing': drawing,
+                                                                     'id': playerId,
+                                                                     'word': data.word
+                                                                     });
+                                                         lastEmit = $.now();
+                                                         }
+                                                         
+                                                         // Draw a line for the current user's movement, as it is
+                                                         // not received in the socket.on('moving') event above
+                                                         
+                                                         if(drawing){
+                                                         drawLine(prev.x, prev.y, e.pageX, e.pageY);
+                                                         prev.x = e.pageX;
+                                                         prev.y = e.pageY;
+                                                         }
+                                                         });
+                                                  
+                                                  doc.bind('mouseup mouseleave',function(){
+                                                           drawing = false;
+                                                           });
+                                                  
+                                                   
+
+                                                   }, 10);
+
+                                        
+                                        });
+
+                              socket.on('coopObserve', function(data){
+                                        if (data.clean == 1){
+                                            clearScreen();
+                                        }
+                                        clearScreenOverlay();
+                                        iamArtist = false;
+                                        setTimeout(function(){
+                                                   console.log('I am in pic block observe');
+                                                   drawWord("Observe drawing of " + data.word);
+//                                                   socket.on('moving', function (data) {
+//                                                             
+//                                                             if(! (data.id in clients)){
+//                                                             cursors[data.id] = $('<div class="cursor">').appendTo('#cursors');
+//                                                             }
+//                                                             
+//                                                             
+//                                                             // Move the mouse pointer
+//                                                             cursors[data.id].css({
+//                                                                                  'left' : data.x,
+//                                                                                  'top' : data.y
+//                                                                                  });
+//                                                             
+//                                                             // Is the user drawing?
+//                                                             if(data.drawing && clients[data.id]){
+//                                                             drawLine(clients[data.id].x, clients[data.id].y, data.x, data.y);
+//                                                             }
+//                                                             
+//                                                             // Saving the current client state
+//                                                             clients[data.id] = data;
+//                                                             clients[data.id].updated = $.now();
+//                                                             });
+                                                   
+                                                   
+                                                   }, 10);
+
+                                        });
+                              
+                              
+                              socket.on('coopDraw', function(data){
+                                        if (data.clean == 1){
+                                            clearScreen();
+                                        }
+                                        clearScreenOverlay();
+                                        iamArtist = true;
+                                        setTimeout(function(){
+                                                   console.log('I am in pic block coop');
+                                                   drawWord("Draw " + data.word);
+                                                   canvas.on('mousedown',function(e){
+                                                             e.preventDefault();
+                                                             drawing = true;
+                                                             prev.x = e.pageX;
+                                                             prev.y = e.pageY;
+                                                             });
+                                                   
+                                                   //drawing = true;
+                                                   lastEmit = $.now();
+                                                   doc.on('mousemove',function(e){
+                                                          if($.now() - lastEmit > 30){
+                                                          socket.emit('mouseMoveCoop',{
+                                                                      'x': e.pageX,
+                                                                      'y': e.pageY,
+                                                                      'drawing': drawing,
+                                                                      'id': playerId,
+                                                                      'word': data.word
+                                                                      });
+                                                          lastEmit = $.now();
+                                                          }
+                                                          
+                                                          // Draw a line for the current user's movement, as it is
+                                                          // not received in the socket.on('moving') event above
+                                                          
+                                                          if(drawing){
+                                                          drawLine(prev.x, prev.y, e.pageX, e.pageY);
+                                                          prev.x = e.pageX;
+                                                          prev.y = e.pageY;
+                                                          }
+                                                          });
+                                                   
+                                                   doc.bind('mouseup mouseleave',function(){
+                                                            drawing = false;
+                                                            });
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   }, 10);
+                                        
+
+                                        });
+                              window.onbeforeunload = confirmExit;
+             });
+
+            
+            
+            function drawLine(fromx, fromy, tox, toy){
+                ctx.beginPath();
+                ctx.moveTo(fromx, fromy);
+                ctx.lineTo(tox, toy);
+                ctx.stroke();
+                ctx.closePath();
+            }
+            
+            function confirmExit(){
+                socket.emit('clientClosed');
+            }
+            
+            function clearScreenCoop(){
+                canvas.width = canvas.width;
+            }
+            function clearScreenOverlay(){
+                //ctx_overlay.clearRect(0, 0, 1024, 768);
+                $('#overlay').hide();
+                $('#paper').show();
+                
+            }
+            
+            function clearScreen(){
+                ctx.clearRect(0, 0, 1024, 768);
+                prev =  {};
+                drawing = false;
+                $(document).unbind('mousemove');
+            }
+            function drawFixationMark(){
+                $('#overlay').hide();
+                ctx.font = "100px Arial";
+                ctx.fillText("+", 480, 384);
+            }
+            function drawFixationMarkOverlay(){
+                $('#overlay').show();
+                $('#paper').hide();
+                ctx_overlay.font = "100px Arial";
+                ctx_overlay.fillText("+", 480, 384);
+            }
+            function drawWord(word){
+                //ctx.clearRect(0, 0, 150, 700);
+                //ctx.fillText("", 50, 50);
+                ctx.fillStyle = "rgba(240, 240, 240, 1)";
+                ctx.fillRect(0, 0, 650, 70);
+                setTimeout(function(){
+                           ctx.font = "30px Arial";
+                           ctx.fillStyle = "rgba(0, 0, 0, 1)";
+                           ctx.fillText("Player " + playerId + ", " + word, 50, 50);
+                           }, 10);
+            }
+            function drawZigzag(word){
+                //ctx.clearRect(0, 0, 150, 700);
+                //ctx.fillText("", 50, 50);
+                ctx.fillStyle = "rgba(240, 240, 240, 1)";
+                ctx.fillRect(0, 0, 650, 70);
+                setTimeout(function(){
+                           ctx.font = "30px Arial";
+                           ctx.fillStyle = "rgba(0, 0, 0, 1)";
+                           ctx.fillText("Player " + playerId + ", " + word, 50, 50);
+                           }, 10);
+            }
+            function instructionPage(){
+                ctx.font = "20px Arial";
+                ctx.fillText("Please wait for the experiment to begin", 100, 100);
+                ctx.fillText("1. Remember to keep your head still, use only wrist movement while drawing", 100, 150);
+                ctx.fillText("2. While drawing, press the pen hard on tablet surface, to avoid drawing artifacts ", 100, 200);
+                ctx.fillText("3. Three phases in Pictionary game: Independent drawing, inspiration, and turn-taking", 100, 250);
+                ctx.fillText("4. You have 30s for each phase, continue to add elements for the full 30s, even if you finish early", 100, 300);
+                ctx.fillText("5. Independet phase: draw the given action word, followed by the spiral shape", 100, 350);
+                ctx.fillText("6. Inspiration phase: Look at other players' drawings and circle any interesting aspects", 100, 400);
+                ctx.fillText("7. Turn-taking phase: try to add on to previous players drawing", 100, 450);
+            }
+            function thanksPage(){
+                $('#overlay').hide();
+                $('#paper').show();
+                ctx.font = "20px Arial";
+                ctx.fillText("Thanks for playing!", 300, 300);
+            }
+            function inspireInstructions(){
+                ctx.font = "30px Arial";
+                ctx.fillText("Circle interesting aspects", 550, 50);
+            }
+            
+            function callFuncs() {
+                funcs[counter++]();
+                if (counter < funcs.length) setTimeout(callFuncs, 5000);
+            }
+           function addUser(){
+              playerId = $("#playerId").val();
+              scannerId = $("#scannerId").val();
+              runId = $("#runId").val();
+              dialog.dialog( "close" );
+              socket.emit('join', {"pid": playerId, "sid": scannerId, "rid": runId});
+              document.title = playerId + ' at ' + scannerId;
+           }
+           
+            </script>
+       
+    </head>
+   
+    <body>
+        <canvas id="paper" width="1024" height="768" style="position: absolute; left: 0px; top: 0px;border:5px solid #000000;">
+            Your browser needs to support canvas for this to work!
+        </canvas>
+        <canvas id="overlay" style="position: absolute; left: 0px; top: 0px;border:5px solid #000000;" width="1024" height="768"/>
+       
+
+
+       
+        <div id="dialog-form" title="Add new player">
+            <form>
+            <fieldset>
+                <label for="playerId">Player ID</label>
+                <input type="text" name="playerId" id="playerId" value="1, 2 or 3" class="text ui-widget-content ui-corner-all">
+                <p>
+                <label for="scannerId">Scanner ID</label>
+                <input type="text" name="scannerId" id="scannerId" value="CNI, 3T2 or 3T3" class="text ui-widget-content ui-corner-all">
+                <p>
+                <label for="runId">Run Number</label>
+                <input type="text" name="runId" id="runId" value="1, 2 or 3" class="text ui-widget-content ui-corner-all">
+                <p>
+            </fieldset>
+            </form>
+        </div>
+        
+        <button id="add-player">Add new player</button>
+       
+
+    </body>
+    
